@@ -1,0 +1,8 @@
+[Unit]
+Description=Append tunnel failure journal for %I
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/bin/sh -lc 'mkdir -p /var/log/tgctxbot && printf "\n[%s] %s\n" "$(date -Is)" "%I" >> /var/log/tgctxbot/tunnel-events.log && journalctl -u "%I" -n 50 --no-pager >> /var/log/tgctxbot/tunnel-events.log'

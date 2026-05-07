@@ -1,0 +1,11 @@
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      HTTP_PROXY: "${UPTIME_KUMA_HTTP_PROXY:-http://127.0.0.1:43128}"
+      HTTPS_PROXY: "${UPTIME_KUMA_HTTPS_PROXY:-http://127.0.0.1:43128}"
+      NO_PROXY: "${UPTIME_KUMA_NO_PROXY:-localhost,127.0.0.1}"
+    volumes:
+      - "${UPTIME_KUMA_DATA:-/opt/uptime-kuma-data}:/app/data"

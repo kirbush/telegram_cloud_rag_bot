@@ -1,0 +1,9 @@
+[Unit]
+Description=NotebookLM tunnel watchdog
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=-/etc/default/tgctxbot-tunnel-watchdog
+ExecStart=/usr/bin/env python3 /opt/telegram_cloud_rag_bot/deploy/systemd/tgctxbot-tunnel-watchdog.py

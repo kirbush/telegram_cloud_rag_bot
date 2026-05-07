@@ -1,0 +1,160 @@
+name: Deploy VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do on the VPS"
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - restart
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy lightweight bot to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      DEPLOY_ACTION: ${{ inputs.action || 'deploy' }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      VPS_PATH: ${{ secrets.VPS_PATH || '/opt/telegram_cloud_rag_bot' }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/vps_deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_SHA='$DEPLOY_SHA' VPS_PATH='$VPS_PATH' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+
+          cd "$VPS_PATH"
+
+          if [ "${DEPLOY_ACTION:-deploy}" = "deploy" ]; then
+            echo "::group::Git sync"
+            git remote set-url origin https://github.com/kirillbush91/telegram_cloud_rag.git
+            git fetch origin main
+            git reset --hard "$DEPLOY_SHA"
+            git clean -fd \
+              -e .env \
+              -e .env.vps \
+              -e .state/
+            git status --short --branch
+            echo "::endgroup::"
+          else
+            echo "Manual restart requested; keeping current checkout."
+            git status --short --branch
+          fi
+
+          echo "::group::Compose config"
+          docker compose -p tgctxbot -f docker-compose.vps.yml config >/tmp/tgctxbot-compose-config.yml
+          echo "::endgroup::"
+
+          echo "::group::Deploy primary tgctxbot"
+          if [ "${DEPLOY_ACTION:-deploy}" = "deploy" ]; then
+            docker compose -p tgctxbot -f docker-compose.vps.yml up -d --build api
+            docker compose -p tgctxbot -f docker-compose.vps.yml --profile cutover up -d --build bot
+          else
+            docker compose -p tgctxbot -f docker-compose.vps.yml restart api
+            docker compose -p tgctxbot -f docker-compose.vps.yml --profile cutover restart bot
+          fi
+          echo "::endgroup::"
+
+          wait_live() {
+            local name="$1"
+            local url="$2"
+            local curl_error_file="/tmp/${name}-live-curl.err"
+            local attempt
+            for attempt in $(seq 1 30); do
+              if curl -fsS "$url" 2>"$curl_error_file"; then
+                echo
+                echo "$name live"
+                return 0
+              fi
+              echo "$name not live yet ($attempt/30)"
+              sleep 5
+            done
+            cat "$curl_error_file" >&2 || true
+            echo "$name failed liveness"
+            return 1
+          }
+
+          check_ready() {
+            local name="$1"
+            local url="$2"
+            local body_file="/tmp/${name}-ready.json"
+            local status
+            status="$(curl -sS -o "$body_file" -w '%{http_code}' "$url" || true)"
+            cat "$body_file" || true
+            echo
+            if [ "$status" = "200" ]; then
+              echo "$name ready"
+              return 0
+            fi
+            if grep -q '"reason":"auth_expired"' "$body_file"; then
+              echo "::warning::$name readiness is degraded because NotebookLM auth is expired; deploy succeeded but auth refresh is needed."
+              return 0
+            fi
+            echo "$name readiness failed with HTTP $status"
+            return 1
+          }
+
+          echo "::group::Health checks"
+          wait_live "primary" "http://127.0.0.1:8010/health"
+          check_ready "primary" "http://127.0.0.1:8010/health/ready"
+          echo "::endgroup::"
+
+          echo "::group::Container status"
+          docker ps --filter name=tgctxbot --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+          docker inspect tgctxbot-api-1 tgctxbot-bot-1 \
+            --format '{{.Name}} restart={{.RestartCount}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+          echo "::endgroup::"
+
+          echo "::group::Recent error scan"
+          docker logs --since 90s tgctxbot-bot-1 2>&1 | grep -Ei 'error|exception|traceback|failed|conflict' && exit 1 || true
+          docker logs --since 90s tgctxbot-api-1 2>&1 | grep -Ei 'error|exception|traceback|failed' && exit 1 || true
+          echo "::endgroup::"
+          REMOTE

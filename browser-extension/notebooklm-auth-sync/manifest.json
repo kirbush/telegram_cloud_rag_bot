@@ -1,0 +1,38 @@
+{
+  "manifest_version": 2,
+  "name": "NotebookLM Auth Sync",
+  "version": "0.1.0",
+  "description": "Sync allowed Google and NotebookLM cookies from Firefox Android to the tgctxbot auth refresh page.",
+  "permissions": [
+    "cookies",
+    "https://*.google.com/*",
+    "https://google.com/*",
+    "https://notebooklm.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://googleusercontent.com/*",
+    "https://usercontent.google.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/auth-session/*",
+        "https://*/auth-session/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "notebooklm-auth-sync@tgctxbot.local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

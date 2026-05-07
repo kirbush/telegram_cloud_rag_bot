@@ -1,0 +1,47 @@
+services:
+  api:
+    build:
+      context: .
+    restart: on-failure
+    user: "0:0"
+    command: >-
+      sh -lc 'exec uvicorn app.api.main:app --host "$${NOTEBOOKLM_ADMIN_BIND_HOST:-127.0.0.1}" --port ${VPS_ADMIN_PORT:-8010}'
+    network_mode: host
+    env_file:
+      - path: ${VPS_ENV_FILE:-.env.vps}
+        required: false
+    environment:
+      NOTEBOOKLM_BACKGROUND_SYNC_ENABLED: "true"
+      NOTEBOOKLM_ADMIN_BIND_HOST: "127.0.0.1"
+      UI_HOST: "127.0.0.1"
+      UI_PORT: "${VPS_BOT_UI_PORT:-8000}"
+    volumes:
+      - ${VPS_STATE_DIR:-./.state}:/app/.state
+      - ${VPS_SHARED_NOTEBOOKLM_AUTH_DIR:-./.state/notebooklm/shared-auth}:/app/.state/notebooklm/shared-auth
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import os, sys, urllib.request; port=os.environ.get('VPS_ADMIN_PORT','${VPS_ADMIN_PORT:-8010}'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health/ready', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  bot:
+    build:
+      context: .
+    restart: unless-stopped
+    command: python -m app.main
+    network_mode: host
+    env_file:
+      - path: ${VPS_ENV_FILE:-.env.vps}
+        required: false
+    environment:
+      UI_HOST: "127.0.0.1"
+      UI_PORT: "${VPS_BOT_UI_PORT:-8000}"
+    volumes:
+      - ${VPS_STATE_DIR:-./.state}:/app/.state
+      - ${VPS_SHARED_NOTEBOOKLM_AUTH_DIR:-./.state/notebooklm/shared-auth}:/app/.state/notebooklm/shared-auth
+    profiles:
+      - cutover
