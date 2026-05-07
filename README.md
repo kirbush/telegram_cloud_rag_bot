@@ -130,14 +130,3 @@ See `.env.example` for a local template and `.env.vps.example` for a VPS templat
 - SQLite
 - PowerShell/Python Windows helper for cookie sync
 
-## Before publishing your fork
-
-Run a local secret scan before making a repository public:
-
-```bash
-gitleaks detect --source . --no-git
-gitleaks detect --source . --log-opts="--all"
-trufflehog git file://. --only-verified
-```
-
-A truly clean public release should be pushed as a new repository with a fresh first commit, not as a public fork that preserves private history.
